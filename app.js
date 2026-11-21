@@ -259,7 +259,7 @@
       '<h3>Radar de semáforo</h3>' + blocoRegistra('semaforo') +
       '<h3>Câmera de leitura de placa</h3><p>Votuporanga tem 57 câmeras de monitoramento, 24 delas com leitura de placa, e abriu licitação em abril de 2026 para mais 24 (16 com leitura de placa). Os pontos roxos são os locais anunciados para as novas.</p>' + blocoRegistra('placa') +
       '<h3>Sem localização exata</h3><ul>' + DADOS.semLocal.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>' +
-      '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e vibração a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. A tela fica acesa enquanto o mapa estiver aberto. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
+      '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e bipe (e vibração no Android; o iPhone não deixa sites vibrarem) a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. A tela fica acesa enquanto o mapa estiver aberto; com a tela bloqueada ou outro app na frente, os alertas param. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
       '<p class="aviso">Respeite sempre a sinalização da via: o limite real é o da placa. Não mexa no celular dirigindo.</p>' +
       '<h3>Fontes</h3>' + listaFontes(Object.keys(DADOS.fontes))
     );
