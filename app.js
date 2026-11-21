@@ -1,8 +1,10 @@
-/* Radar Votuporanga — mapa de radares com alerta por GPS. Sem dependências além do Leaflet. */
+/* Radar Votuporanga — mapa de radares com alerta por GPS. Mapa: MapLibre GL + OpenFreeMap (gira e inclina em 3D). */
 (function () {
   'use strict';
 
-  const CENTRO = [-20.4176, -49.9745];
+  const CENTRO = [-49.9745, -20.4176]; // [lon, lat]
+  const ESTILO = { claro: 'https://tiles.openfreemap.org/styles/liberty', escuro: 'https://tiles.openfreemap.org/styles/dark' };
+  const INCLINACAO_3D = 60;
   const RAIO_ALERTA = { velocidade: 300, semaforo: 250, rodovia: 650, placa: 200 };
   const RAIO_BUSCA = 1500; // m: até onde o painel mostra o "próximo radar"
 
@@ -60,14 +62,16 @@
   let DADOS = null;
   const filtros = { velocidade: true, semaforo: true, rodovia: true, placa: true, previsto: true };
   const marcadores = new Map();
-  let map, camada, userMarker, userAccuracy;
+  let map, userMarker;
+  let modoDirecao = lerPref('modoDirecao', false); // true: o mapa gira para a direção em que você anda
+  let toastTimer = null;
   let pos = null;             // {lat, lon, acc, kmh, heading, t}
   let ultimaPos = null;
   let watchId = null;
   let dirigindo = false;
   let seguir = false;
   let somLigado = lerPref('som', true);
-  let audioCtx = null;
+  let bipes = null;           // <audio> com bipes gerados no próprio app (tocam no iPhone mesmo no silencioso)
   let wakeLock = null;
   const alertados = new Map(); // id -> true enquanto estiver dentro do raio
   let ultimoBipAcima = 0;
@@ -143,14 +147,19 @@
   }
 
   function desenhar() {
-    camada.clearLayers();
+    marcadores.forEach((m) => m.remove());
     marcadores.clear();
-    for (const it of DADOS.itens) {
-      if (!visivel(it)) continue;
-      const icon = L.divIcon({ className: 'mk' + (selecionado === it.id ? ' sel' : ''), html: htmlPlaca(it), iconSize: [38, 38], iconAnchor: [19, 19] });
-      const m = L.marker([it.lat, it.lon], { icon, title: it.nome, keyboard: true, riseOnHover: true, zIndexOffset: it.status === 'previsto' ? 0 : 100 });
-      m.on('click', () => abrirDetalhe(it));
-      m.addTo(camada);
+    // previstos primeiro, para ficarem por baixo dos ativos
+    const ordem = DADOS.itens.filter(visivel).sort((a, b) => (a.status === 'previsto' ? 0 : 1) - (b.status === 'previsto' ? 0 : 1));
+    for (const it of ordem) {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'mk' + (selecionado === it.id ? ' sel' : '');
+      el.title = it.nome;
+      el.setAttribute('aria-label', it.nome);
+      el.innerHTML = htmlPlaca(it);
+      el.addEventListener('click', (e) => { e.stopPropagation(); abrirDetalhe(it); });
+      const m = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([it.lon, it.lat]).addTo(map);
       marcadores.set(it.id, m);
     }
     const ativos = DADOS.itens.filter((i) => i.tipo !== 'placa' && i.status !== 'previsto').length;
@@ -225,11 +234,12 @@
       '<div class="acoes"><a href="' + gm + '" target="_blank" rel="noopener">Abrir no Google Maps</a><a href="' + wz + '" target="_blank" rel="noopener">Abrir no Waze</a></div>',
       () => { selecionado = null; desenhar(); }
     );
-    if (!dirigindo) map.panTo([it.lat, it.lon], { animate: true });
+    if (!dirigindo) map.easeTo({ center: [it.lon, it.lat], duration: 500 });
   }
 
   function abrirLista() {
-    const ref = pos || { lat: map.getCenter().lat, lon: map.getCenter().lng };
+    const c = map.getCenter();
+    const ref = pos || { lat: c.lat, lon: c.lng };
     const itens = DADOS.itens.filter(visivel).map((it) => ({ it, d: distancia(ref, it) })).sort((a, b) => a.d - b.d);
     abrirSheet(
       '<h2 id="sheet-title">Radares e câmeras</h2><p class="nota">' + (pos ? 'Ordenados pela distância de você.' : 'Ordenados pela distância do centro do mapa. Toque em “Dirigir” ou no botão de localização para usar sua posição.') + '</p>' +
@@ -240,7 +250,8 @@
     $('#sheet-body').querySelectorAll('.lista button').forEach((b) => b.addEventListener('click', () => {
       const it = DADOS.itens.find((x) => x.id === b.dataset.id);
       fecharSheet();
-      map.setView([it.lat, it.lon], Math.max(map.getZoom(), 16));
+      seguir = false;
+      map.jumpTo({ center: [it.lon, it.lat], zoom: Math.max(map.getZoom(), 16) });
       abrirDetalhe(it);
     }));
   }
@@ -259,31 +270,59 @@
       '<h3>Radar de semáforo</h3>' + blocoRegistra('semaforo') +
       '<h3>Câmera de leitura de placa</h3><p>Votuporanga tem 57 câmeras de monitoramento, 24 delas com leitura de placa, e abriu licitação em abril de 2026 para mais 24 (16 com leitura de placa). Os pontos roxos são os locais anunciados para as novas.</p>' + blocoRegistra('placa') +
       '<h3>Sem localização exata</h3><ul>' + DADOS.semLocal.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>' +
+      '<h3>Girar e 3D</h3><p>Gire o mapa com dois dedos e incline arrastando dois dedos para cima. O botão da <b>bússola</b> volta o norte para cima; tocando de novo, o mapa passa a girar com a sua direção (como no GPS do carro). O botão <b>3D</b> inclina o mapa e levanta os prédios.</p>' +
       '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e bipe (e vibração no Android; o iPhone não deixa sites vibrarem) a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. A tela fica acesa enquanto o mapa estiver aberto; com a tela bloqueada ou outro app na frente, os alertas param. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
+      '<p>Para testar o som, desligue e ligue o botão do alto-falante: ele bipa e diz “Som ligado”. O som sai pelo volume de mídia (o mesmo da música). No iPhone com iOS 17 ou mais novo ele toca mesmo com a chave de silencioso ligada; em versões mais antigas, desligue o silencioso.</p>' +
       '<p class="aviso">Respeite sempre a sinalização da via: o limite real é o da placa. Não mexa no celular dirigindo.</p>' +
       '<h3>Fontes</h3>' + listaFontes(Object.keys(DADOS.fontes))
     );
   }
 
   // ---------- áudio e voz ----------
-  function bip(freq, dur, vezes) {
-    if (!audioCtx || !somLigado) return;
-    const t0 = audioCtx.currentTime;
-    for (let i = 0; i < (vezes || 1); i++) {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = 'sine'; o.frequency.value = freq;
-      const ini = t0 + i * (dur + 0.08);
-      g.gain.setValueAtTime(0.0001, ini);
-      g.gain.exponentialRampToValueAtTime(0.35, ini + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ini + dur);
-      o.connect(g).connect(audioCtx.destination);
-      o.start(ini); o.stop(ini + dur + 0.02);
+  // Bipe em WAV gerado na hora: <audio> segue o volume de mídia e não é calado pela chave de silencioso
+  // como o Web Audio (que no iPhone fica mudo no modo silencioso).
+  function criarWav(freq, dur, vezes) {
+    const taxa = 22050, pausa = 0.08;
+    const total = Math.ceil(taxa * (vezes * dur + (vezes - 1) * pausa + 0.05));
+    const buf = new ArrayBuffer(44 + total * 2), v = new DataView(buf);
+    const txt = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    txt(0, 'RIFF'); v.setUint32(4, 36 + total * 2, true); txt(8, 'WAVE'); txt(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, taxa, true);
+    v.setUint32(28, taxa * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); txt(36, 'data'); v.setUint32(40, total * 2, true);
+    for (let i = 0; i < total; i++) {
+      const t = i / taxa, ciclo = dur + pausa, k = Math.floor(t / ciclo), tl = t - k * ciclo;
+      let s = 0;
+      if (k < vezes && tl < dur) s = Math.sin(2 * Math.PI * freq * t) * 0.7 * Math.min(1, tl / 0.01, (dur - tl) / 0.03);
+      v.setInt16(44 + i * 2, Math.round(s * 32767), true);
     }
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+
+  // Chamar SEMPRE dentro de um toque do usuário: o iPhone só libera som de site depois de um toque.
+  function prepararSom() {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* iOS antigo */ }
+    if (!bipes) {
+      bipes = { ok: new Audio(criarWav(660, 0.12, 1)), alerta: new Audio(criarWav(880, 0.15, 2)), acima: new Audio(criarWav(1240, 0.18, 3)) };
+      Object.values(bipes).forEach((a) => { a.preload = 'auto'; a.setAttribute('playsinline', ''); });
+    }
+    for (const k of ['alerta', 'acima']) {
+      const a = bipes[k];
+      if (a.__liberado) continue;
+      a.muted = true;
+      const p = a.play();
+      if (p) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; a.__liberado = true; }).catch(() => { a.muted = false; });
+    }
+  }
+  function tocar(nome) {
+    if (!somLigado || !bipes || !bipes[nome]) return;
+    const a = bipes[nome];
+    try { a.muted = false; a.currentTime = 0; const p = a.play(); if (p) p.catch(() => {}); } catch (e) { /* */ }
   }
   function falar(txt) {
     if (!somLigado || !('speechSynthesis' in window)) return;
     try {
-      speechSynthesis.cancel();
+      // cancelar e falar em seguida faz o Safari engolir a fala; só cancela se houver algo tocando
+      if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(txt);
       u.lang = 'pt-BR'; u.rate = 1.05;
       const v = speechSynthesis.getVoices().find((x) => /pt[-_]BR/i.test(x.lang));
@@ -321,23 +360,89 @@
   }
 
   function desenharUsuario() {
-    const ll = [pos.lat, pos.lon];
+    const ll = [pos.lon, pos.lat];
     if (!userMarker) {
-      userMarker = L.marker(ll, {
-        icon: L.divIcon({ className: '', html: '<div class="user-dot"><div class="halo"></div><div class="arrow">' + ICO.seta + '</div></div>', iconSize: [26, 26], iconAnchor: [13, 13] }),
-        interactive: false, zIndexOffset: 1000, keyboard: false
-      }).addTo(map);
-      userAccuracy = L.circle(ll, { radius: pos.acc, stroke: false, fillColor: '#1867d6', fillOpacity: 0.08, interactive: false }).addTo(map);
+      const el = document.createElement('div');
+      el.className = 'user-dot';
+      el.innerHTML = '<div class="halo"></div><div class="arrow">' + ICO.seta + '</div>';
+      // a seta fica "deitada" no mapa e gira junto com ele
+      userMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(ll).addTo(map);
     } else {
-      userMarker.setLatLng(ll);
-      userAccuracy.setLatLng(ll).setRadius(Math.min(pos.acc, 300));
+      userMarker.setLngLat(ll);
     }
-    const el = userMarker.getElement();
-    if (el) {
-      const seta = el.querySelector('.arrow');
-      if (seta) seta.style.transform = 'rotate(' + (pos.heading || 0) + 'deg)';
+    userMarker.setRotation(pos.heading || 0);
+    if (seguir) {
+      const alvo = { center: ll, zoom: Math.max(map.getZoom(), 16), duration: 900, essential: true };
+      if (modoDirecao && pos.heading !== null) alvo.bearing = pos.heading;
+      // em movimento, o carro fica mais para baixo da tela e sobra mapa à frente
+      if (dirigindo) alvo.padding = { top: 160, bottom: 40, left: 0, right: 0 };
+      map.easeTo(alvo);
     }
-    if (seguir) map.setView(ll, Math.max(map.getZoom(), 16), { animate: true });
+  }
+
+  function aviso(txt) {
+    const t = $('#toast');
+    t.textContent = txt; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
+  }
+
+  // ---------- rotação e 3D ----------
+  function atualizarBussola() {
+    const b = map.getBearing();
+    $('#btn-bussola .agulha').style.transform = 'rotate(' + (-b) + 'deg)';
+    const bt = $('#btn-bussola');
+    bt.setAttribute('aria-pressed', String(modoDirecao));
+    bt.setAttribute('aria-label', modoDirecao ? 'Mapa girando com a sua direção. Toque para pôr o norte para cima'
+      : Math.abs(b) > 1 ? 'Mapa girado. Toque para pôr o norte para cima' : 'Norte para cima. Toque para o mapa girar com a sua direção');
+  }
+  function tocarBussola() {
+    if (modoDirecao) {
+      modoDirecao = false; gravarPref('modoDirecao', false);
+      map.easeTo({ bearing: 0, duration: 500 });
+      aviso('Norte para cima');
+    } else if (Math.abs(map.getBearing()) > 1) {
+      map.easeTo({ bearing: 0, duration: 500 });
+      aviso('Norte para cima');
+    } else {
+      modoDirecao = true; gravarPref('modoDirecao', true);
+      if (pos && pos.heading !== null) map.easeTo({ bearing: pos.heading, duration: 500 });
+      aviso(pos ? 'O mapa gira com a sua direção' : 'O mapa vai girar com a sua direção quando o GPS ligar');
+    }
+    atualizarBussola();
+  }
+  function atualizar3D() {
+    const em3d = map.getPitch() > 10;
+    const b = $('#btn-3d');
+    b.setAttribute('aria-pressed', String(em3d));
+    b.textContent = em3d ? '2D' : '3D';
+    b.setAttribute('aria-label', em3d ? 'Voltar o mapa para 2D' : 'Ver o mapa em 3D');
+    if (map.getLayer('predios-3d')) map.setLayoutProperty('predios-3d', 'visibility', em3d ? 'visible' : 'none');
+  }
+  function tocar3D() {
+    const em3d = map.getPitch() > 10;
+    map.easeTo({ pitch: em3d ? 0 : INCLINACAO_3D, zoom: em3d ? map.getZoom() : Math.max(map.getZoom(), 16), duration: 700 });
+    gravarPref('3d', !em3d);
+  }
+  function adicionarPredios() {
+    if (map.getLayer('predios-3d') || !map.getSource('openmaptiles')) return;
+    const camadas = map.getStyle().layers;
+    camadas.forEach((l) => { if (l.type === 'fill-extrusion') map.setLayoutProperty(l.id, 'visibility', 'none'); });
+    const rotulo = camadas.find((l) => l.type === 'symbol');
+    map.addLayer({
+      id: 'predios-3d', type: 'fill-extrusion', source: 'openmaptiles', 'source-layer': 'building', minzoom: 14,
+      layout: { visibility: map.getPitch() > 10 ? 'visible' : 'none' },
+      paint: {
+        'fill-extrusion-color': escuro() ? '#2c3442' : '#d8d3cb',
+        'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 6],
+        'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+        'fill-extrusion-opacity': 0.88
+      }
+    }, rotulo ? rotulo.id : undefined);
+  }
+  function escuro() {
+    const t = document.documentElement.dataset.theme;
+    return t === 'dark' || (t !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   }
 
   function erroGPS(e) {
@@ -394,7 +499,7 @@
       hud.classList.add('perto');
       if (!alertados.has(it.id)) {
         alertados.set(it.id, true);
-        bip(880, 0.14, 2);
+        tocar('alerta');
         vibrar([180, 90, 180]);
         setTimeout(() => falar(frasePara(it, d)), 350);
       }
@@ -402,7 +507,7 @@
       if (lim && kmh !== null && kmh > lim + 2) {
         hud.classList.add('acima');
         const agora = Date.now();
-        if (agora - ultimoBipAcima > 2500) { ultimoBipAcima = agora; bip(1240, 0.18, 3); vibrar([300, 100, 300]); }
+        if (agora - ultimoBipAcima > 2500) { ultimoBipAcima = agora; tocar('acima'); vibrar([300, 100, 300]); }
       }
     }
   }
@@ -417,8 +522,8 @@
     hud.classList.toggle('dirigindo', dirigindo);
     $('#btn-go').textContent = dirigindo ? 'Parar' : 'Dirigir';
     if (dirigindo) {
-      try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) { audioCtx = null; }
-      bip(660, 0.08, 1);
+      prepararSom();
+      tocar('ok');
       if ('speechSynthesis' in window) speechSynthesis.getVoices();
       falar('Alertas de radar ligados.');
       seguir = true;
@@ -432,6 +537,7 @@
       hud.classList.remove('perto', 'acima');
       alertados.clear();
       if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+      try { if (navigator.audioSession) navigator.audioSession.type = 'auto'; } catch (e) { /* */ }
       $('#vel').textContent = '--';
       $('#hud-next').innerHTML = '<div class="hud-msg">Alertas desligados. Toque em <b>Dirigir</b> para ligar de novo.</div>';
     }
@@ -460,20 +566,27 @@
 
   // ---------- inicialização ----------
   function iniciarMapa() {
-    map = L.map('map', { zoomControl: false, attributionControl: true, minZoom: 11, maxZoom: 19 }).setView(CENTRO, 14);
-    const escuro = () => document.documentElement.dataset.theme === 'dark' ||
-      (document.documentElement.dataset.theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
-    }).addTo(map);
-    const tema = () => tiles.getContainer() && tiles.getContainer().classList.toggle('tiles-escuros', escuro());
-    tiles.on('load', tema); tema();
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', tema);
-    camada = L.layerGroup().addTo(map);
-    map.on('dragstart', () => {
-      if (seguir) { seguir = false; if (dirigindo) $('#btn-recentrar').hidden = false; }
+    const em3d = lerPref('3d', false);
+    map = new maplibregl.Map({
+      container: 'map',
+      style: escuro() ? ESTILO.escuro : ESTILO.claro,
+      center: CENTRO, zoom: em3d ? 15.5 : 14, pitch: em3d ? INCLINACAO_3D : 0,
+      minZoom: 10, maxZoom: 19, maxPitch: 70,
+      attributionControl: false, dragRotate: true, touchPitch: true, pitchWithRotate: true
     });
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
+    map.on('style.load', () => { adicionarPredios(); atualizar3D(); });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => map.setStyle(escuro() ? ESTILO.escuro : ESTILO.claro));
+    map.on('rotate', atualizarBussola);
+    map.on('pitch', atualizar3D);
+    // mexeu no mapa com o dedo: para de seguir (o botão Recentralizar volta a seguir)
+    const soltar = (e) => {
+      if (!e.originalEvent || !seguir) return;
+      seguir = false; if (dirigindo) $('#btn-recentrar').hidden = false;
+    };
+    map.on('dragstart', soltar);
+    map.on('rotatestart', (e) => { soltar(e); if (e.originalEvent && modoDirecao) { modoDirecao = false; gravarPref('modoDirecao', false); atualizarBussola(); } });
+    atualizarBussola();
   }
 
   function ligarControles() {
@@ -494,14 +607,16 @@
     $('#btn-go').addEventListener('click', alternarDirigir);
     $('#btn-recentrar').addEventListener('click', () => {
       seguir = true; $('#btn-recentrar').hidden = true;
-      if (pos) map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 16));
+      if (pos) desenharUsuario();
     });
+    $('#btn-bussola').addEventListener('click', tocarBussola);
+    $('#btn-3d').addEventListener('click', tocar3D);
     $('#btn-local').addEventListener('click', () => {
-      if (pos) { map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 16)); return; }
+      if (pos) { map.easeTo({ center: [pos.lon, pos.lat], zoom: Math.max(map.getZoom(), 16), duration: 600 }); return; }
       $('#btn-local').classList.add('ativo');
       if (location.hash === '#demo') { iniciarGPS(); return; }
       navigator.geolocation.getCurrentPosition((p) => {
-        aoMover(p); map.setView([pos.lat, pos.lon], 16);
+        aoMover(p); map.easeTo({ center: [pos.lon, pos.lat], zoom: 16, duration: 600 });
         iniciarGPS();
       }, erroGPS, { enableHighAccuracy: true, timeout: 15000 });
     });
@@ -511,7 +626,20 @@
     bs.addEventListener('click', () => {
       somLigado = !somLigado; gravarPref('som', somLigado); syncSom();
       if (!somLigado && 'speechSynthesis' in window) speechSynthesis.cancel();
+      if (somLigado) { prepararSom(); tocar('ok'); falar('Som ligado.'); } // também serve de teste de volume
     });
+
+    // Zoom só no mapa: impede o pinça/duplo toque de ampliar a interface (o Safari ignora user-scalable=no).
+    const fora = (e) => !(e.target && e.target.closest && e.target.closest('#map'));
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach((ev) =>
+      document.addEventListener(ev, (e) => { if (fora(e)) e.preventDefault(); }, { passive: false }));
+    document.addEventListener('touchmove', (e) => { if (e.touches.length > 1 && fora(e)) e.preventDefault(); }, { passive: false });
+    let ultimoToque = 0;
+    document.addEventListener('touchend', (e) => {
+      const agora = Date.now();
+      if (agora - ultimoToque < 350 && fora(e) && !e.target.closest('button, a')) e.preventDefault();
+      ultimoToque = agora;
+    }, { passive: false });
     $('#sheet-close').addEventListener('click', fecharSheet);
     $('#backdrop').addEventListener('click', fecharSheet);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sheet').hidden) fecharSheet(); });

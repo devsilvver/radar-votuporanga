@@ -10,7 +10,7 @@ Mapa (PWA) dos radares e câmeras de trânsito de Votuporanga-SP, feito para o c
 
 | Arquivo | O que é |
 |---|---|
-| `index.html`, `style.css`, `app.js` | O app (Leaflet + mapa do OpenStreetMap) |
+| `index.html`, `style.css`, `app.js` | O app (MapLibre GL + mapa vetorial do OpenFreeMap: gira, inclina e mostra prédios em 3D) |
 | `radares.json` | **Base de dados.** Para adicionar/corrigir um radar, edite aqui |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Funciona como app instalado e guarda o mapa já visto para sinal fraco |
 | `ferramentas/geocodificar.py` | Converte endereços em coordenadas (ArcGIS). Uso: um endereço por linha num .txt → `python ferramentas/geocodificar.py lista.txt saida.json` |

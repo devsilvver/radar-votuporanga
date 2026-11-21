@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Radar Votuporanga</title>
 <meta name="description" content="Mapa dos radares e câmeras de trânsito de Votuporanga-SP, com alerta por GPS.">
 <meta name="theme-color" content="#14181f">
@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -42,6 +42,10 @@
 </header>
 
 <div class="fabs">
+  <button class="fab" id="btn-bussola" aria-label="Norte para cima. Toque para o mapa girar com a sua direção">
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="agulha"><path d="M12 2.5l4 9.5h-8z" fill="var(--sign-red)"/><path d="M12 21.5l-4-9.5h8z" fill="currentColor" opacity=".55"/></svg>
+  </button>
+  <button class="fab fab-txt" id="btn-3d" aria-label="Ver o mapa em 3D" aria-pressed="false">3D</button>
   <button class="fab" id="btn-lista" aria-label="Lista de radares por distância">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4" cy="6" r="1.4" fill="currentColor"/><circle cx="4" cy="12" r="1.4" fill="currentColor"/><circle cx="4" cy="18" r="1.4" fill="currentColor"/></svg>
   </button>
@@ -66,6 +70,7 @@
 </section>
 
 <button class="recentrar" id="btn-recentrar" hidden>Recentralizar</button>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <div class="sheet-backdrop" id="backdrop" hidden></div>
 <section class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
@@ -76,7 +81,7 @@
   <div class="sheet-body" id="sheet-body"></div>
 </section>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

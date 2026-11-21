@@ -1,10 +1,10 @@
 /* Service worker: guarda o app e os pedaços de mapa já vistos para funcionar com sinal fraco. */
-const VERSAO = 'radar-votu-v2';
+const VERSAO = 'radar-votu-v3';
 const APP = [
   './', 'index.html', 'style.css', 'app.js', 'radares.json', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css',
-  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js'
 ];
 const TILES = 'radar-votu-tiles';
 const MAX_TILES = 1500;
@@ -31,8 +31,16 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Pedaços do mapa: primeiro o cache, depois a rede.
-  if (url.hostname === 'tile.openstreetmap.org') {
+  // Mapa (OpenFreeMap): o estilo sempre da rede (aponta para a versão atual dos dados);
+  // pedaços, fontes e ícones do mapa: primeiro o cache, depois a rede.
+  if (url.hostname === 'tiles.openfreemap.org' && url.pathname.startsWith('/styles/')) {
+    e.respondWith(fetch(req).then((r) => {
+      if (r.ok) { const cp = r.clone(); caches.open(TILES).then((c) => c.put(req, cp)); }
+      return r;
+    }).catch(() => caches.open(TILES).then((c) => c.match(req))));
+    return;
+  }
+  if (url.hostname === 'tiles.openfreemap.org') {
     e.respondWith(caches.open(TILES).then(async (c) => {
       const hit = await c.match(req);
       if (hit) return hit;
