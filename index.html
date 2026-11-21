@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Radar Votuporanga</title>
+<meta name="description" content="Mapa dos radares e câmeras de trânsito de Votuporanga-SP, com alerta por GPS.">
+<meta name="theme-color" content="#14181f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map" aria-label="Mapa"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-sign" aria-hidden="true">50</span>
+    <div class="brand-text">
+      <strong>Radar Votuporanga</strong>
+      <small id="resumo">Carregando…</small>
+    </div>
+    <button class="icon-btn" id="btn-info" aria-label="Sobre os dados e o que cada equipamento registra">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.5v6M12 7.2v.1" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="chips" role="group" aria-label="Filtros">
+    <button class="chip on" data-f="velocidade" aria-pressed="true"><i class="dot dot-vel"></i>Velocidade</button>
+    <button class="chip on" data-f="semaforo" aria-pressed="true"><i class="dot dot-sem"></i>Semáforo</button>
+    <button class="chip on" data-f="rodovia" aria-pressed="true"><i class="dot dot-rod"></i>Rodovias</button>
+    <button class="chip on" data-f="placa" aria-pressed="true"><i class="dot dot-pla"></i>Leitura de placa</button>
+    <button class="chip on" data-f="previsto" aria-pressed="true"><i class="dot dot-prev"></i>Previstos</button>
+  </div>
+</header>
+
+<div class="fabs">
+  <button class="fab" id="btn-lista" aria-label="Lista de radares por distância">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4" cy="6" r="1.4" fill="currentColor"/><circle cx="4" cy="12" r="1.4" fill="currentColor"/><circle cx="4" cy="18" r="1.4" fill="currentColor"/></svg>
+  </button>
+  <button class="fab" id="btn-local" aria-label="Centralizar na minha localização">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <button class="fab" id="btn-som" aria-label="Desligar alerta por voz" aria-pressed="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="ico-som"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="ico-mudo"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" fill="currentColor"/><path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+</div>
+
+<section class="hud" id="hud" aria-live="polite">
+  <div class="hud-vel">
+    <span id="vel">--</span>
+    <small>km/h</small>
+  </div>
+  <div class="hud-next" id="hud-next">
+    <div class="hud-msg">Toque em <b>Dirigir</b> para receber alertas de voz ao chegar perto de um radar.</div>
+  </div>
+  <button class="btn-go" id="btn-go">Dirigir</button>
+</section>
+
+<button class="recentrar" id="btn-recentrar" hidden>Recentralizar</button>
+
+<div class="sheet-backdrop" id="backdrop" hidden></div>
+<section class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <button class="sheet-close" id="sheet-close" aria-label="Fechar">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="sheet-body" id="sheet-body"></div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
