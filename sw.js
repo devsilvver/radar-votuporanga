@@ -1,7 +1,7 @@
 /* Service worker: guarda o app e os pedaços de mapa já vistos para funcionar com sinal fraco. */
-const VERSAO = 'radar-votu-v4';
+const VERSAO = 'radar-votu-v5';
 const APP = [
-  './', 'index.html', 'style.css', 'app.js', 'radares.json', 'manifest.webmanifest',
+  './', 'index.html', 'style.css', 'app.js', 'radares.json', 'osm-brasil.json', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css',
   'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js'

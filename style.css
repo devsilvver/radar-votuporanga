@@ -101,6 +101,7 @@ svg { width: 22px; height: 22px; }
 .dot-rod { background: var(--hwy); }
 .dot-pla { background: var(--plate); }
 .dot-prev { border: 2px dashed var(--muted); }
+.dot-osm { background: #fff; border: 2px solid var(--sign-red); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sign-red) 25%, transparent); }
 
 /* ---------- botões flutuantes ---------- */
 .fabs {
@@ -218,6 +219,8 @@ svg { width: 22px; height: 22px; }
 .pill.verificado { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .pill.ativo { background: color-mix(in srgb, var(--user) 14%, transparent); color: var(--user); }
 .pill.confirmar { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.pill.osm { background: var(--surface-2); color: var(--muted); }
+.sign.osm { border-width: 4px; }
 .pill.previsto { background: var(--surface-2); color: var(--muted); border: 1px dashed var(--muted); }
 
 .campos { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0 4px; }

@@ -18,7 +18,8 @@
     verificado: '✓ Verificado pelo Ipem',
     ativo: 'Em operação',
     confirmar: 'A confirmar',
-    previsto: 'Previsto'
+    previsto: 'Previsto',
+    osm: 'Não verificado · OpenStreetMap'
   };
 
   const ICO = {
@@ -60,7 +61,8 @@
 
   // ---------- estado ----------
   let DADOS = null;
-  const filtros = { velocidade: true, semaforo: true, rodovia: true, placa: true, previsto: true };
+  let OSM = null;             // radares do resto do Brasil (OpenStreetMap): {atualizado, itens, porId}
+  const filtros = { velocidade: true, semaforo: true, rodovia: true, placa: true, previsto: true, osm: true };
   const marcadores = new Map();
   let map, userMarker;
   let modoDirecao = lerPref('modoDirecao', false); // true: o mapa gira para a direção em que você anda
@@ -126,6 +128,7 @@
   function htmlPlaca(it, extraCls) {
     const cls = ['sign'];
     if (it.status === 'previsto') cls.push('previsto');
+    if (it.status === 'osm') cls.push('osm');
     if (extraCls) cls.push(extraCls);
     let miolo = '';
     if (it.tipo === 'semaforo') { cls.push('sem'); miolo = ICO.semaforo; }
@@ -143,6 +146,7 @@
 
   function visivel(it) {
     if (!filtros[it.tipo]) return false;
+    if (it.status === 'osm' && !filtros.osm) return false;
     if (it.status === 'previsto' && !filtros.previsto) return false;
     return true;
   }
@@ -163,9 +167,81 @@
       const m = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([it.lon, it.lat]).addTo(map);
       marcadores.set(it.id, m);
     }
+    atualizarResumo();
+  }
+  function atualizarResumo() {
     const ativos = DADOS.itens.filter((i) => i.tipo !== 'placa' && i.status !== 'previsto').length;
     const cams = DADOS.itens.filter((i) => i.tipo === 'placa').length;
-    $('#resumo').textContent = ativos + ' radares no mapa · ' + cams + ' câmeras previstas · dados de ' + DADOS.atualizado;
+    $('#resumo').textContent = OSM
+      ? ativos + ' em Votuporanga · ' + OSM.itens.length.toLocaleString('pt-BR') + ' no Brasil (OSM)'
+      : ativos + ' radares no mapa · ' + cams + ' câmeras previstas · dados de ' + DADOS.atualizado;
+  }
+  const todos = () => (OSM ? DADOS.itens.concat(OSM.itens) : DADOS.itens);
+
+  // ---------- radares do resto do Brasil (OpenStreetMap) ----------
+  // São milhares: em vez de um botão por radar, viram uma camada do próprio mapa, agrupada em bolinhas
+  // com o número de radares quando o mapa está longe.
+  function carregarOSM() {
+    fetch('osm-brasil.json', { cache: 'no-cache' }).then((r) => r.json()).then((j) => {
+      const manuais = DADOS.itens.filter((i) => i.tipo !== 'placa');
+      const itens = [], porId = new Map();
+      for (const [lat, lon, lim, id] of j.r) {
+        const p = { lat, lon };
+        // mesmo radar já levantado à mão (Votuporanga): fica só o nosso, que tem mais detalhes
+        if (manuais.some((m) => Math.abs(m.lat - lat) < 0.002 && Math.abs(m.lon - lon) < 0.002 && distancia(m, p) < 80)) continue;
+        // vias: undefined até o app descobrir a rua do radar pelo mapa (viaDoRadar)
+        const it = {
+          id: 'o' + id, osm: id, tipo: 'velocidade', status: 'osm', vias: undefined,
+          nome: 'Radar de velocidade', limite: lim || null, limiteNota: lim ? 'informado no OpenStreetMap' : '', lat, lon
+        };
+        itens.push(it); porId.set(it.id, it);
+      }
+      OSM = { atualizado: j.atualizado, itens, porId };
+      camadaOSM();
+      atualizarResumo();
+    }).catch(() => { /* sem o arquivo: fica só Votuporanga */ });
+  }
+  function geoOSM() {
+    return {
+      type: 'FeatureCollection',
+      features: OSM.itens.filter(visivel).map((it) => ({
+        type: 'Feature', geometry: { type: 'Point', coordinates: [it.lon, it.lat] },
+        properties: { id: it.id, l: it.limite ? String(it.limite) : '?' }
+      }))
+    };
+  }
+  function camadaOSM() {
+    if (!OSM || !map || !map.getSource('openmaptiles')) return;
+    const src = map.getSource('osm-radares');
+    if (src) { src.setData(geoOSM()); return; }
+    const fonte = ['Noto Sans Bold'];
+    map.addSource('osm-radares', { type: 'geojson', data: geoOSM(), cluster: true, clusterMaxZoom: 11, clusterRadius: 55 });
+    map.addLayer({
+      id: 'osm-grupo', type: 'circle', source: 'osm-radares', filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': '#c8102e', 'circle-opacity': 0.85, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2,
+        'circle-radius': ['step', ['get', 'point_count'], 13, 10, 16, 100, 20, 1000, 25]
+      }
+    });
+    map.addLayer({
+      id: 'osm-grupo-n', type: 'symbol', source: 'osm-radares', filter: ['has', 'point_count'],
+      layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': fonte, 'text-size': 12, 'text-allow-overlap': true },
+      paint: { 'text-color': '#fff' }
+    });
+    map.addLayer({
+      id: 'osm-ponto', type: 'circle', source: 'osm-radares', filter: ['!', ['has', 'point_count']],
+      paint: {
+        'circle-color': '#fff',
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 6, 14, 12],
+        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 14, 3.5],
+        'circle-stroke-color': '#c8102e'
+      }
+    });
+    map.addLayer({
+      id: 'osm-ponto-n', type: 'symbol', source: 'osm-radares', filter: ['!', ['has', 'point_count']], minzoom: 12,
+      layout: { 'text-field': ['get', 'l'], 'text-font': fonte, 'text-size': 11, 'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': '#14181f' }
+    });
   }
 
   // ---------- painel inferior (sheet) ----------
@@ -209,7 +285,11 @@
       if (it.limiteNota) l += ' — ' + it.limiteNota + ', confira a placa';
       campos.push(['Limite', l]);
     }
-    campos.push(['Posição', it.precisao === 'endereço' ? 'Pelo número do endereço' : it.precisao === 'cruzamento' ? 'No cruzamento' : 'Aproximada (' + it.precisao.replace('aprox. ', '±').replace('aprox.', 'pelo ponto de referência') + ')']);
+    if (it.status === 'osm') {
+      if (it.vias && it.vias.length) campos.push(['Via', it.vias.join(' / ')]);
+      if (!it.limite) campos.push(['Limite', 'Não informado no OpenStreetMap — confira a placa']);
+      campos.push(['Posição', 'Marcada por voluntários do OpenStreetMap']);
+    } else campos.push(['Posição', it.precisao === 'endereço' ? 'Pelo número do endereço' : it.precisao === 'cruzamento' ? 'No cruzamento' : 'Aproximada (' + it.precisao.replace('aprox. ', '±').replace('aprox.', 'pelo ponto de referência') + ')']);
     if (pos) campos.push(['Distância de você', fmtDist(distancia(pos, it))]);
 
     let multa = '';
@@ -223,15 +303,21 @@
         '<tr><td>Faixa</td><td>Parar sobre a faixa de pedestres<br><span class="nota">Média · R$ 130,16 · 4 pontos (art. 183)</span></td></tr></tbody></table>';
     }
 
+    const info = it.status === 'osm'
+      ? 'Radar cadastrado por voluntários no OpenStreetMap (lista baixada em ' + OSM.atualizado + '). Não foi conferido por nós: pode ter sido desligado, mudado de lugar ou ter outro limite.'
+      : it.info;
+    const fontes = it.status === 'osm'
+      ? '<ul class="fontes"><li><a href="https://www.openstreetmap.org/node/' + it.osm + '" target="_blank" rel="noopener">Ponto nº ' + it.osm + ' no OpenStreetMap</a> <small>(© colaboradores do OpenStreetMap, ODbL)</small></li></ul>'
+      : listaFontes(it.fontes);
     const gm = 'https://www.google.com/maps/search/?api=1&query=' + it.lat + ',' + it.lon;
     const wz = 'https://waze.com/ul?ll=' + it.lat + ',' + it.lon + '&navigate=yes';
     abrirSheet(
       '<div class="det-head">' + htmlPlaca(it) + '<div><span class="pill ' + it.status + '">' + NOMES_STATUS[it.status] + '</span>' +
       '<h2 id="sheet-title">' + esc(it.nome) + '</h2></div></div>' +
-      '<p>' + esc(it.info) + '</p>' +
+      '<p>' + esc(info) + '</p>' +
       '<dl class="campos">' + campos.map(([k, v]) => '<dt>' + k + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl>' +
       '<h3>O que ele registra da sua placa</h3>' + blocoRegistra(it.tipo) + multa +
-      '<h3>Fontes</h3>' + listaFontes(it.fontes) +
+      '<h3>Fontes</h3>' + fontes +
       '<div class="acoes"><a href="' + gm + '" target="_blank" rel="noopener">Abrir no Google Maps</a><a href="' + wz + '" target="_blank" rel="noopener">Abrir no Waze</a></div>',
       () => { selecionado = null; desenhar(); }
     );
@@ -241,15 +327,15 @@
   function abrirLista() {
     const c = map.getCenter();
     const ref = pos || { lat: c.lat, lon: c.lng };
-    const itens = DADOS.itens.filter(visivel).map((it) => ({ it, d: distancia(ref, it) })).sort((a, b) => a.d - b.d);
+    const itens = todos().filter(visivel).map((it) => ({ it, d: distancia(ref, it) })).sort((a, b) => a.d - b.d).slice(0, 60);
     abrirSheet(
-      '<h2 id="sheet-title">Radares e câmeras</h2><p class="nota">' + (pos ? 'Ordenados pela distância de você.' : 'Ordenados pela distância do centro do mapa. Toque em “Dirigir” ou no botão de localização para usar sua posição.') + '</p>' +
+      '<h2 id="sheet-title">Radares e câmeras</h2><p class="nota">' + (pos ? 'Os 60 mais perto de você.' : 'Os 60 mais perto do centro do mapa. Toque em “Dirigir” ou no botão de localização para usar sua posição.') + '</p>' +
       '<ul class="lista">' + itens.map(({ it, d }) =>
         '<li><button data-id="' + it.id + '">' + htmlPlaca(it) + '<span class="l-txt"><b>' + esc(it.nome) + '</b><span>' + NOMES_TIPO[it.tipo] + ' · ' + NOMES_STATUS[it.status] + '</span></span><span class="l-dist">' + fmtDist(d) + '</span></button></li>'
       ).join('') + '</ul>'
     );
     $('#sheet-body').querySelectorAll('.lista button').forEach((b) => b.addEventListener('click', () => {
-      const it = DADOS.itens.find((x) => x.id === b.dataset.id);
+      const it = todos().find((x) => x.id === b.dataset.id);
       fecharSheet();
       seguir = false;
       map.jumpTo({ center: [it.lon, it.lat], zoom: Math.max(map.getZoom(), 16) });
@@ -271,6 +357,7 @@
       '<h3>Radar de semáforo</h3>' + blocoRegistra('semaforo') +
       '<h3>Câmera de leitura de placa</h3><p>Votuporanga tem 57 câmeras de monitoramento, 24 delas com leitura de placa, e abriu licitação em abril de 2026 para mais 24 (16 com leitura de placa). Os pontos roxos são os locais anunciados para as novas.</p>' + blocoRegistra('placa') +
       '<h3>Sem localização exata</h3><ul>' + DADOS.semLocal.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>' +
+      '<h3>Resto do Brasil</h3><p>Fora de Votuporanga, o mapa mostra ' + (OSM ? '<b>' + OSM.itens.length.toLocaleString('pt-BR') + ' radares</b>' : 'os radares') + ' cadastrados por voluntários no <a href="https://www.openstreetmap.org" target="_blank" rel="noopener">OpenStreetMap</a>' + (OSM ? ' (lista de ' + OSM.atualizado + ', atualizada todo mês)' : '') + '. Eles <b>não foram conferidos</b>: cidades pequenas costumam ter poucos ou nenhum cadastrado, e alguns podem estar desligados ou com outro limite. Ao longe aparecem agrupados (o número na bolinha é a quantidade); aproxime para ver cada um. Os alertas ao dirigir também valem para eles. Use o filtro <b>OpenStreetMap</b> para escondê-los. Dados © colaboradores do OpenStreetMap, licença ODbL.</p>' +
       '<h3>Girar e 3D</h3><p>Gire o mapa com dois dedos e incline arrastando dois dedos para cima. O botão da <b>bússola</b> volta o norte para cima; tocando de novo, o mapa passa a girar com a sua direção (como no GPS do carro). O botão <b>3D</b> inclina o mapa e levanta os prédios.</p>' +
       '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e bipe (e vibração no Android; o iPhone não deixa sites vibrarem) a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. Só entram os radares <b>da rua ou rodovia em que você está, à sua frente</b>: os de ruas paralelas, transversais ou que já ficaram para trás são ignorados. A direção vem do seu próprio movimento, então os avisos começam depois dos primeiros metros andando. A tela fica acesa enquanto o mapa estiver aberto; com a tela bloqueada ou outro app na frente, os alertas param. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
       '<p>Para testar o som, desligue e ligue o botão do alto-falante: ele bipa e diz “Som ligado”. O som sai pelo volume de mídia (o mesmo da música). No iPhone com iOS 17 ou mais novo ele toca mesmo com a chave de silencioso ligada; em versões mais antigas, desligue o silencioso.</p>' +
@@ -351,7 +438,7 @@
     const dist = d >= 1000 ? fmtDist(d) : (Math.round(d / 50) * 50) + ' metros';
     if (it.tipo === 'semaforo') return 'Radar de semáforo a ' + dist + '.';
     if (it.tipo === 'placa') return 'Câmera de leitura de placa a ' + dist + '.';
-    return (it.tipo === 'rodovia' ? 'Radar na rodovia a ' : 'Radar a ') + dist + '. Limite ' + it.limite + '.';
+    return (it.tipo === 'rodovia' ? 'Radar na rodovia a ' : 'Radar a ') + dist + '.' + (it.limite ? ' Limite ' + it.limite + '.' : '');
   }
 
   // ---------- GPS ----------
@@ -394,36 +481,72 @@
     String(ref || '').split(/[;,]/).forEach((r) => { if (r.trim()) s.add(normVia(r)); });
     return s;
   }
-  function detectarVia() {
-    if (!map || !pos || !map.getSource('openmaptiles')) return via;
-    let feats;
-    try { feats = map.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation_name' }); } catch (e) { return via; }
-    const cosL = Math.cos(rad(pos.lat));
-    const cands = new Map();
-    for (const f of feats) {
+  let ruas = null; // trechos de rua com nome já carregados no mapa (renovado a cada posição do GPS)
+  function carregarRuas() {
+    ruas = null;
+    if (!map || !map.getSource('openmaptiles')) return;
+    try { ruas = map.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation_name' }); } catch (e) { ruas = null; }
+  }
+  // Chama fn(nome, ref, distância em m, rumo do trecho) para cada trecho de rua com nome a até `raio` m do ponto p.
+  function trechosPerto(p, raio, fn) {
+    if (!ruas) return;
+    const cosL = Math.cos(rad(p.lat));
+    const gLat = raio / 110574 + 0.002, gLon = raio / (111320 * cosL) + 0.002;
+    for (const f of ruas) {
       const nome = f.properties.name || '', ref = f.properties.ref || '';
       if (!nome && !ref) continue;
       const g = f.geometry;
       const linhas = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
       for (const l of linhas) {
         for (let i = 1; i < l.length; i++) {
-          const ax = (l[i - 1][0] - pos.lon) * 111320 * cosL, ay = (l[i - 1][1] - pos.lat) * 110574;
-          const bx = (l[i][0] - pos.lon) * 111320 * cosL, by = (l[i][1] - pos.lat) * 110574;
+          if (Math.abs(l[i][1] - p.lat) > gLat && Math.abs(l[i - 1][1] - p.lat) > gLat && (l[i][1] - p.lat) * (l[i - 1][1] - p.lat) > 0) continue;
+          if (Math.abs(l[i][0] - p.lon) > gLon && Math.abs(l[i - 1][0] - p.lon) > gLon && (l[i][0] - p.lon) * (l[i - 1][0] - p.lon) > 0) continue;
+          const ax = (l[i - 1][0] - p.lon) * 111320 * cosL, ay = (l[i - 1][1] - p.lat) * 110574;
+          const bx = (l[i][0] - p.lon) * 111320 * cosL, by = (l[i][1] - p.lat) * 110574;
           const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
           if (!L2) continue;
           const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2));
           const d = Math.hypot(ax + t * dx, ay + t * dy);
-          if (d > 35) continue;
-          const brg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
-          const al = pos.heading === null ? 0 : Math.min(difAng(pos.heading, brg), difAng(pos.heading, (brg + 180) % 360));
-          if (al > 40) continue; // rua atravessada (cruzamento): não é a sua
-          const sc = d + al * 1.5;
-          const k = nome + '|' + ref;
-          const c = cands.get(k);
-          if (!c || sc < c.sc) cands.set(k, { nome, ref, sc });
+          if (d > raio) continue;
+          fn(nome, ref, d, (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
         }
       }
     }
+  }
+  // Radar do OpenStreetMap: descobre em que rua ele está (a rua com nome mais perto, até 20 m).
+  // Só decide quando o ponto está na tela (os dados da rua já carregaram); até lá vale a regra da linha de frente.
+  const ROD_RE = /^(BR|[A-Z]{2})[- ]?\d{2,3}\b/;
+  function viaDoRadar(it) {
+    if (it.vias !== undefined || !ruas) return;
+    const b = map.getBounds();
+    if (!b.contains([it.lon, it.lat])) return;
+    const perto = new Map();
+    trechosPerto(it, 20, (nome, ref, d) => {
+      const k = nome + '|' + ref;
+      if (!perto.has(k) || d < perto.get(k).d) perto.set(k, { nome, ref, d });
+    });
+    const lista = [...perto.values()].sort((a, b2) => a.d - b2.d);
+    const escolhidas = lista.filter((c) => c.d <= lista[0].d + 4).slice(0, 2); // radar no cruzamento: as duas
+    it.vias = [];
+    for (const c of escolhidas) {
+      if (c.nome && !it.vias.includes(c.nome)) it.vias.push(c.nome);
+      String(c.ref).split(/[;,]/).map((r) => r.trim()).filter(Boolean).forEach((r) => { if (!it.vias.includes(r)) it.vias.push(r); });
+      if (ROD_RE.test(c.ref)) it.tipo = 'rodovia';
+    }
+    if (it.vias.length) it.nome = 'Radar · ' + it.vias.slice(0, 2).join(' / ');
+  }
+  function detectarVia() {
+    if (!pos) return via;
+    if (!ruas) return via;
+    const cands = new Map();
+    trechosPerto(pos, 35, (nome, ref, d, brg) => {
+      const al = pos.heading === null ? 0 : Math.min(difAng(pos.heading, brg), difAng(pos.heading, (brg + 180) % 360));
+      if (al > 40) return; // rua atravessada (cruzamento): não é a sua
+      const sc = d + al * 1.5;
+      const k = nome + '|' + ref;
+      const c = cands.get(k);
+      if (!c || sc < c.sc) cands.set(k, { nome, ref, sc });
+    });
     if (!cands.size) {
       if (via && Date.now() - via.t > 15000) via = null; // sem rua com nome por perto: esquece depois de 15 s
       return via;
@@ -562,7 +685,7 @@
 
   // ---------- alertas ----------
   function candidatos() {
-    return DADOS.itens.filter((it) => visivel(it) && it.status !== 'previsto');
+    return todos().filter((it) => visivel(it) && it.status !== 'previsto');
   }
 
   function avaliarAlertas() {
@@ -570,13 +693,17 @@
     const kmh = pos.kmh;
     $('#vel').textContent = kmh === null ? '--' : Math.round(kmh);
 
+    carregarRuas();
     detectarVia();
     let prox = null;
     for (const it of candidatos()) {
+      // longe (mais de ~3 km em linha reta): nem calcula a distância exata
+      if (Math.abs(it.lat - pos.lat) > 0.03 || Math.abs(it.lon - pos.lon) > 0.03) { alertados.delete(it.id); continue; }
       const d = distancia(pos, it);
       const raio = RAIO_ALERTA[it.tipo];
       if (d > raio * 2 + 100) alertados.delete(it.id);
       if (d > RAIO_BUSCA) continue;
+      if (it.status === 'osm') viaDoRadar(it);
       if (!naRota(it, d)) continue;
       if (!prox || d < prox.d) prox = { it, d };
     }
@@ -646,9 +773,12 @@
   // #demo: sobe a Av. Wilson Foz (deve avisar os 2 radares dela).
   // #demo-paralela: sobe a Rua Oito de Agosto, paralela (não deve avisar os radares da Wilson Foz).
   function iniciarDemo() {
-    const rota = location.hash === '#demo-paralela'
-      ? [[-20.4180, -49.98005], [-20.41669, -49.9803], [-20.41014, -49.98141]]
-      : [[-20.4155, -49.9795], [-20.41447, -49.97966], [-20.40578, -49.98112], [-20.4045, -49.98137]];
+    // #demo-rota=lat,lon;lat,lon;... : rota qualquer (para testar radares de outras cidades)
+    const livre = location.hash.match(/^#demo-rota=(.+)$/);
+    const rota = livre ? decodeURIComponent(livre[1]).split(';').map((p) => p.split(',').map(Number))
+      : location.hash === '#demo-paralela'
+        ? [[-20.4180, -49.98005], [-20.41669, -49.9803], [-20.41014, -49.98141]]
+        : [[-20.4155, -49.9795], [-20.41447, -49.97966], [-20.40578, -49.98112], [-20.4045, -49.98137]];
     const passos = [];
     for (let i = 0; i < rota.length - 1; i++) {
       const a = { lat: rota[i][0], lon: rota[i][1] }, b = { lat: rota[i + 1][0], lon: rota[i + 1][1] };
@@ -673,12 +803,18 @@
       container: 'map',
       style: escuro() ? ESTILO.escuro : ESTILO.claro,
       center: CENTRO, zoom: em3d ? 15.5 : 14, pitch: em3d ? INCLINACAO_3D : 0,
-      minZoom: 10, maxZoom: 19, maxPitch: 70,
+      minZoom: 3, maxZoom: 19, maxPitch: 70,
       attributionControl: false, dragRotate: true, touchPitch: true, pitchWithRotate: true
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
     if (location.hash.startsWith('#demo')) window.__mapa = map; // só para testes
-    map.on('style.load', () => { adicionarPredios(); atualizar3D(); });
+    map.on('style.load', () => { adicionarPredios(); atualizar3D(); camadaOSM(); });
+    map.on('click', 'osm-ponto', (e) => { const it = OSM && OSM.porId.get(e.features[0].properties.id); if (it) abrirDetalhe(it); });
+    map.on('click', 'osm-grupo', (e) => {
+      const f = e.features[0];
+      map.getSource('osm-radares').getClusterExpansionZoom(f.properties.cluster_id)
+        .then((z) => map.easeTo({ center: f.geometry.coordinates, zoom: z + 0.5, duration: 600 })).catch(() => {});
+    });
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => map.setStyle(escuro() ? ESTILO.escuro : ESTILO.claro));
     map.on('rotate', atualizarBussola);
     map.on('pitch', atualizar3D);
@@ -703,6 +839,7 @@
         c.setAttribute('aria-pressed', String(filtros[f]));
         gravarPref('filtros', filtros);
         desenhar();
+        camadaOSM();
       });
     });
     $('#btn-info').addEventListener('click', abrirInfo);
@@ -760,6 +897,7 @@
       return;
     }
     desenhar();
+    carregarOSM();
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
