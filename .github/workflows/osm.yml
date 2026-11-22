@@ -21,7 +21,8 @@ jobs:
       - name: Baixar radares do Brasil (extrato da Geofabrik)
         run: |
           pip install osmium
-          python ferramentas/baixar_osm.py
+          curl -fsSL --retry 6 --retry-delay 30 --retry-all-errors -A "radar-votuporanga/1.0"             -o /tmp/brasil.osm.pbf https://download.geofabrik.de/south-america/brazil-latest.osm.pbf
+          python ferramentas/baixar_osm.py --pbf /tmp/brasil.osm.pbf
       - name: Publicar se mudou
         run: |
           git add osm-brasil.json
