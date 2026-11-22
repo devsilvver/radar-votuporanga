@@ -24,9 +24,9 @@ jobs:
           python ferramentas/baixar_osm.py
       - name: Publicar se mudou
         run: |
-          if git diff --quiet -- osm-brasil.json; then echo "Sem mudanças"; exit 0; fi
+          git add osm-brasil.json
+          if git diff --cached --quiet; then echo "Sem mudanças"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add osm-brasil.json
           git commit -m "Atualiza radares do OpenStreetMap"
           git push
