@@ -1,5 +1,5 @@
 /* Service worker: guarda o app e os pedaços de mapa já vistos para funcionar com sinal fraco. */
-const VERSAO = 'radar-votu-v3';
+const VERSAO = 'radar-votu-v4';
 const APP = [
   './', 'index.html', 'style.css', 'app.js', 'radares.json', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png',

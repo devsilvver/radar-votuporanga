@@ -66,7 +66,8 @@
   let modoDirecao = lerPref('modoDirecao', false); // true: o mapa gira para a direção em que você anda
   let toastTimer = null;
   let pos = null;             // {lat, lon, acc, kmh, heading, t}
-  let ultimaPos = null;
+  const trilha = [];          // últimas posições, para calcular direção e velocidade sem tremer
+  let via = null;             // via em que você está: {nome, ref, chaves:Set, t}
   let watchId = null;
   let dirigindo = false;
   let seguir = false;
@@ -271,7 +272,7 @@
       '<h3>Câmera de leitura de placa</h3><p>Votuporanga tem 57 câmeras de monitoramento, 24 delas com leitura de placa, e abriu licitação em abril de 2026 para mais 24 (16 com leitura de placa). Os pontos roxos são os locais anunciados para as novas.</p>' + blocoRegistra('placa') +
       '<h3>Sem localização exata</h3><ul>' + DADOS.semLocal.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>' +
       '<h3>Girar e 3D</h3><p>Gire o mapa com dois dedos e incline arrastando dois dedos para cima. O botão da <b>bússola</b> volta o norte para cima; tocando de novo, o mapa passa a girar com a sua direção (como no GPS do carro). O botão <b>3D</b> inclina o mapa e levanta os prédios.</p>' +
-      '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e bipe (e vibração no Android; o iPhone não deixa sites vibrarem) a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. A tela fica acesa enquanto o mapa estiver aberto; com a tela bloqueada ou outro app na frente, os alertas param. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
+      '<h3>Alertas ao dirigir</h3><p>Com <b>Dirigir</b> ligado, o celular avisa por voz e bipe (e vibração no Android; o iPhone não deixa sites vibrarem) a cerca de 300 m de um radar na cidade e 650 m na rodovia, e fica vermelho se você passar do limite. Só entram os radares <b>da rua ou rodovia em que você está, à sua frente</b>: os de ruas paralelas, transversais ou que já ficaram para trás são ignorados. A direção vem do seu próprio movimento, então os avisos começam depois dos primeiros metros andando. A tela fica acesa enquanto o mapa estiver aberto; com a tela bloqueada ou outro app na frente, os alertas param. Para usar como app, abra no navegador e escolha <b>Adicionar à tela inicial</b>.</p>' +
       '<p>Para testar o som, desligue e ligue o botão do alto-falante: ele bipa e diz “Som ligado”. O som sai pelo volume de mídia (o mesmo da música). No iPhone com iOS 17 ou mais novo ele toca mesmo com a chave de silencioso ligada; em versões mais antigas, desligue o silencioso.</p>' +
       '<p class="aviso">Respeite sempre a sinalização da via: o limite real é o da placa. Não mexa no celular dirigindo.</p>' +
       '<h3>Fontes</h3>' + listaFontes(Object.keys(DADOS.fontes))
@@ -281,20 +282,30 @@
   // ---------- áudio e voz ----------
   // Bipe em WAV gerado na hora: <audio> segue o volume de mídia e não é calado pela chave de silencioso
   // como o Web Audio (que no iPhone fica mudo no modo silencioso).
-  function criarWav(freq, dur, vezes) {
-    const taxa = 22050, pausa = 0.08;
-    const total = Math.ceil(taxa * (vezes * dur + (vezes - 1) * pausa + 0.05));
+  // Som de "sino" suave: notas graves, volume baixo, entrada gradual e queda natural (sem estalo nem apito).
+  // notas: [[frequência Hz, duração s], ...] tocadas em sequência.
+  function criarWav(notas, volume) {
+    const taxa = 22050, pausa = 0.03;
+    const totalSeg = notas.reduce((s, n) => s + n[1] + pausa, 0) + 0.05;
+    const total = Math.ceil(taxa * totalSeg);
+    const amostras = new Float32Array(total);
+    let ini = 0;
+    for (const [f, d] of notas) {
+      const n0 = Math.floor(ini * taxa), n = Math.floor(d * taxa);
+      for (let i = 0; i < n && n0 + i < total; i++) {
+        const t = i / taxa;
+        const env = Math.min(1, t / 0.025) * Math.exp(-t / (d * 0.4)) * Math.min(1, (d - t) / 0.04);
+        const s = Math.sin(2 * Math.PI * f * t) + 0.15 * Math.sin(4 * Math.PI * f * t) * Math.exp(-t / (d * 0.15));
+        amostras[n0 + i] += s * env * volume;
+      }
+      ini += d + pausa;
+    }
     const buf = new ArrayBuffer(44 + total * 2), v = new DataView(buf);
     const txt = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
     txt(0, 'RIFF'); v.setUint32(4, 36 + total * 2, true); txt(8, 'WAVE'); txt(12, 'fmt ');
     v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, taxa, true);
     v.setUint32(28, taxa * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); txt(36, 'data'); v.setUint32(40, total * 2, true);
-    for (let i = 0; i < total; i++) {
-      const t = i / taxa, ciclo = dur + pausa, k = Math.floor(t / ciclo), tl = t - k * ciclo;
-      let s = 0;
-      if (k < vezes && tl < dur) s = Math.sin(2 * Math.PI * freq * t) * 0.7 * Math.min(1, tl / 0.01, (dur - tl) / 0.03);
-      v.setInt16(44 + i * 2, Math.round(s * 32767), true);
-    }
+    for (let i = 0; i < total; i++) v.setInt16(44 + i * 2, Math.round(Math.max(-1, Math.min(1, amostras[i])) * 32767), true);
     return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
   }
 
@@ -302,7 +313,11 @@
   function prepararSom() {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* iOS antigo */ }
     if (!bipes) {
-      bipes = { ok: new Audio(criarWav(660, 0.12, 1)), alerta: new Audio(criarWav(880, 0.15, 2)), acima: new Audio(criarWav(1240, 0.18, 3)) };
+      bipes = {
+        ok: new Audio(criarWav([[587, 0.4]], 0.2)),                          // ré: um toque curto
+        alerta: new Audio(criarWav([[659, 0.38], [523, 0.6]], 0.22)),        // mi → dó: "plim-plom" de aviso
+        acima: new Audio(criarWav([[587, 0.22], [587, 0.22], [440, 0.45]], 0.24)) // ré-ré-lá: acima do limite
+      };
       Object.values(bipes).forEach((a) => { a.preload = 'auto'; a.setAttribute('playsinline', ''); });
     }
     for (const k of ['alerta', 'acima']) {
@@ -344,19 +359,101 @@
     const agora = p.timestamp || Date.now();
     const novo = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy || 30, t: agora, kmh: null, heading: null };
     if (typeof p.coords.speed === 'number' && !isNaN(p.coords.speed) && p.coords.speed >= 0) novo.kmh = p.coords.speed * 3.6;
-    if (typeof p.coords.heading === 'number' && !isNaN(p.coords.heading) && novo.kmh > 3) novo.heading = p.coords.heading;
-    if (ultimaPos) {
-      const d = distancia(ultimaPos, novo), dt = (agora - ultimaPos.t) / 1000;
-      if (novo.kmh === null && dt > 0.4 && dt < 10) novo.kmh = d / dt * 3.6;
-      if (novo.heading === null && d > 4) novo.heading = rumo(ultimaPos, novo);
-      if (novo.heading === null && pos) novo.heading = pos.heading;
-      if (d > 4 || dt > 10) ultimaPos = novo;
-    } else {
-      ultimaPos = novo;
+    const ant = trilha[trilha.length - 1];
+    if (novo.kmh === null && ant) {
+      const dt = (agora - ant.t) / 1000;
+      if (dt > 0.4 && dt < 10) novo.kmh = distancia(ant, novo) / dt * 3.6;
     }
+    // Direção: a do GPS quando está andando; senão, a do trecho percorrido (ponto de 20 m atrás até aqui).
+    if (typeof p.coords.heading === 'number' && !isNaN(p.coords.heading) && novo.kmh > 10) novo.heading = p.coords.heading;
+    if (novo.heading === null) {
+      for (let i = trilha.length - 1; i >= 0; i--) {
+        if (distancia(trilha[i], novo) >= 20) { novo.heading = rumo(trilha[i], novo); break; }
+      }
+    }
+    if (novo.heading === null && pos) novo.heading = pos.heading; // parado: mantém a última direção
+    trilha.push(novo);
+    while (trilha.length > 40) trilha.shift();
     pos = novo;
     desenharUsuario();
     if (dirigindo) avaliarAlertas();
+  }
+
+  // ---------- em que via você está ----------
+  // Usa os nomes das ruas que já vêm no mapa (camada transportation_name do OpenFreeMap): acha a rua
+  // mais perto da sua posição que esteja alinhada com a direção em que você anda.
+  function normVia(s) {
+    return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+      .replace(/^(avenida|av\.?|rua|r\.|travessa|alameda|estrada municipal|estrada|rodovia|vicinal)\s+/, '')
+      .replace(/^(doutor|dr\.?|professor|prof\.?|vereador|coronel|padre)\s+/, '')
+      .replace(/\s+/g, ' ').trim();
+  }
+  function chavesVia(nome, ref) {
+    const s = new Set();
+    if (nome) s.add(normVia(nome));
+    String(ref || '').split(/[;,]/).forEach((r) => { if (r.trim()) s.add(normVia(r)); });
+    return s;
+  }
+  function detectarVia() {
+    if (!map || !pos || !map.getSource('openmaptiles')) return via;
+    let feats;
+    try { feats = map.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation_name' }); } catch (e) { return via; }
+    const cosL = Math.cos(rad(pos.lat));
+    const cands = new Map();
+    for (const f of feats) {
+      const nome = f.properties.name || '', ref = f.properties.ref || '';
+      if (!nome && !ref) continue;
+      const g = f.geometry;
+      const linhas = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      for (const l of linhas) {
+        for (let i = 1; i < l.length; i++) {
+          const ax = (l[i - 1][0] - pos.lon) * 111320 * cosL, ay = (l[i - 1][1] - pos.lat) * 110574;
+          const bx = (l[i][0] - pos.lon) * 111320 * cosL, by = (l[i][1] - pos.lat) * 110574;
+          const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+          if (!L2) continue;
+          const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2));
+          const d = Math.hypot(ax + t * dx, ay + t * dy);
+          if (d > 35) continue;
+          const brg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+          const al = pos.heading === null ? 0 : Math.min(difAng(pos.heading, brg), difAng(pos.heading, (brg + 180) % 360));
+          if (al > 40) continue; // rua atravessada (cruzamento): não é a sua
+          const sc = d + al * 1.5;
+          const k = nome + '|' + ref;
+          const c = cands.get(k);
+          if (!c || sc < c.sc) cands.set(k, { nome, ref, sc });
+        }
+      }
+    }
+    if (!cands.size) {
+      if (via && Date.now() - via.t > 15000) via = null; // sem rua com nome por perto: esquece depois de 15 s
+      return via;
+    }
+    let melhor = null;
+    for (const c of cands.values()) if (!melhor || c.sc < melhor.sc) melhor = c;
+    if (via) { // não troca de rua à toa (ex.: ao passar por um cruzamento)
+      const c = cands.get(via.nome + '|' + via.ref);
+      if (c && c.sc < melhor.sc + 12) melhor = c;
+    }
+    via = { nome: melhor.nome, ref: melhor.ref, chaves: chavesVia(melhor.nome, melhor.ref), t: Date.now() };
+    return via;
+  }
+  function nomeCurto(v) {
+    if (!v) return '';
+    return (v.nome || v.ref).replace(/^Avenida /, 'Av. ').replace(/ Doutor /, ' Dr. ');
+  }
+
+  // O radar está na sua rota? Precisa estar à frente, no sentido em que você anda, e na mesma via.
+  function naRota(it, d) {
+    if (pos.heading === null) return false;
+    if (d < 30) return alertados.has(it.id); // passando por ele agora
+    const th = difAng(pos.heading, rumo(pos, it));
+    if (th >= 90) return false; // ficou para trás
+    if (via && it.vias && it.vias.length) {
+      return th <= 75 && it.vias.some((v) => via.chaves.has(normVia(v)));
+    }
+    // sem saber a via (mapa sem nome da rua): só o que está praticamente na sua linha de frente
+    const lateral = d * Math.sin(rad(th));
+    return lateral <= (it.tipo === 'rodovia' ? 80 : 35);
   }
 
   function desenharUsuario() {
@@ -454,7 +551,7 @@
 
   function iniciarGPS() {
     if (watchId !== null || !('geolocation' in navigator)) return;
-    if (location.hash === '#demo') { iniciarDemo(); return; }
+    if (location.hash.startsWith('#demo')) { iniciarDemo(); return; }
     watchId = navigator.geolocation.watchPosition(aoMover, erroGPS, { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
   }
   function pararGPS() {
@@ -473,22 +570,23 @@
     const kmh = pos.kmh;
     $('#vel').textContent = kmh === null ? '--' : Math.round(kmh);
 
+    detectarVia();
     let prox = null;
     for (const it of candidatos()) {
       const d = distancia(pos, it);
       const raio = RAIO_ALERTA[it.tipo];
       if (d > raio * 2 + 100) alertados.delete(it.id);
       if (d > RAIO_BUSCA) continue;
-      // à frente? se não temos rumo confiável, considera tudo
-      let frente = true;
-      if (pos.heading !== null && kmh !== null && kmh > 8 && d > 40) frente = difAng(pos.heading, rumo(pos, it)) <= 55;
-      if (!frente) continue;
+      if (!naRota(it, d)) continue;
       if (!prox || d < prox.d) prox = { it, d };
     }
 
     hud.classList.remove('perto', 'acima');
     if (!prox) {
-      $('#hud-next').innerHTML = '<div class="hud-msg">Nenhum radar à frente nos próximos ' + fmtDist(RAIO_BUSCA) + '.</div>';
+      const msg = pos.heading === null
+        ? 'Comece a andar para eu saber a sua direção.'
+        : 'Nenhum radar à frente' + (via ? ' na ' + esc(nomeCurto(via)) : '') + ' nos próximos ' + fmtDist(RAIO_BUSCA) + '.';
+      $('#hud-next').innerHTML = '<div class="hud-msg">' + msg + '</div>';
       return;
     }
     const { it, d } = prox;
@@ -545,8 +643,12 @@
 
   // ---------- simulação (#demo) para testar sem sair de casa ----------
   let demoTimer = null;
+  // #demo: sobe a Av. Wilson Foz (deve avisar os 2 radares dela).
+  // #demo-paralela: sobe a Rua Oito de Agosto, paralela (não deve avisar os radares da Wilson Foz).
   function iniciarDemo() {
-    const rota = [[-20.4150, -49.9799], [-20.4125, -49.9803], [-20.4094, -49.9806], [-20.4075, -49.9808], [-20.4040, -49.9811], [-20.4010, -49.9813]];
+    const rota = location.hash === '#demo-paralela'
+      ? [[-20.4180, -49.98005], [-20.41669, -49.9803], [-20.41014, -49.98141]]
+      : [[-20.4155, -49.9795], [-20.41447, -49.97966], [-20.40578, -49.98112], [-20.4045, -49.98137]];
     const passos = [];
     for (let i = 0; i < rota.length - 1; i++) {
       const a = { lat: rota[i][0], lon: rota[i][1] }, b = { lat: rota[i + 1][0], lon: rota[i + 1][1] };
@@ -575,6 +677,7 @@
       attributionControl: false, dragRotate: true, touchPitch: true, pitchWithRotate: true
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
+    if (location.hash.startsWith('#demo')) window.__mapa = map; // só para testes
     map.on('style.load', () => { adicionarPredios(); atualizar3D(); });
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => map.setStyle(escuro() ? ESTILO.escuro : ESTILO.claro));
     map.on('rotate', atualizarBussola);
@@ -614,7 +717,7 @@
     $('#btn-local').addEventListener('click', () => {
       if (pos) { map.easeTo({ center: [pos.lon, pos.lat], zoom: Math.max(map.getZoom(), 16), duration: 600 }); return; }
       $('#btn-local').classList.add('ativo');
-      if (location.hash === '#demo') { iniciarGPS(); return; }
+      if (location.hash.startsWith('#demo')) { iniciarGPS(); return; }
       navigator.geolocation.getCurrentPosition((p) => {
         aoMover(p); map.easeTo({ center: [pos.lon, pos.lat], zoom: 16, duration: 600 });
         iniciarGPS();
