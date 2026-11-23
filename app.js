@@ -434,11 +434,21 @@
   }
   function vibrar(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* */ } }
 
+  // Quanto a posição do radar pode estar errada (m). Radar com posição aproximada avisa mais cedo e o aviso
+  // continua por essa distância depois do ponto marcado, para nunca chegar depois do radar de verdade.
+  function margem(it) {
+    const p = it.precisao || '';
+    const m = p.match(/aprox\.\s*(\d+)/);
+    if (m) return +m[1];
+    if (p === 'endereço') return 40;
+    return 0;
+  }
   function frasePara(it, d) {
     const dist = d >= 1000 ? fmtDist(d) : (Math.round(d / 50) * 50) + ' metros';
-    if (it.tipo === 'semaforo') return 'Radar de semáforo a ' + dist + '.';
-    if (it.tipo === 'placa') return 'Câmera de leitura de placa a ' + dist + '.';
-    return (it.tipo === 'rodovia' ? 'Radar na rodovia a ' : 'Radar a ') + dist + '.' + (it.limite ? ' Limite ' + it.limite + '.' : '');
+    const aprox = margem(it) >= 100 ? ' Posição aproximada, atenção.' : '';
+    if (it.tipo === 'semaforo') return 'Radar de semáforo a ' + dist + '.' + aprox;
+    if (it.tipo === 'placa') return 'Câmera de leitura de placa a ' + dist + '.' + aprox;
+    return (it.tipo === 'rodovia' ? 'Radar na rodovia a ' : 'Radar a ') + dist + '.' + (it.limite ? ' Limite ' + it.limite + '.' : '') + aprox;
   }
 
   // ---------- GPS ----------
@@ -570,7 +580,8 @@
     if (pos.heading === null) return false;
     if (d < 30) return alertados.has(it.id); // passando por ele agora
     const th = difAng(pos.heading, rumo(pos, it));
-    if (th >= 90) return false; // ficou para trás
+    // ficou para trás; se a posição é aproximada, o aviso segue até sair da faixa de dúvida
+    if (th >= 90) return alertados.has(it.id) && d <= margem(it);
     if (via && it.vias && it.vias.length) {
       return th <= 75 && it.vias.some((v) => via.chaves.has(normVia(v)));
     }
@@ -700,7 +711,7 @@
       // longe (mais de ~3 km em linha reta): nem calcula a distância exata
       if (Math.abs(it.lat - pos.lat) > 0.03 || Math.abs(it.lon - pos.lon) > 0.03) { alertados.delete(it.id); continue; }
       const d = distancia(pos, it);
-      const raio = RAIO_ALERTA[it.tipo];
+      const raio = RAIO_ALERTA[it.tipo] + margem(it);
       if (d > raio * 2 + 100) alertados.delete(it.id);
       if (d > RAIO_BUSCA) continue;
       if (it.status === 'osm') viaDoRadar(it);
@@ -717,8 +728,12 @@
       return;
     }
     const { it, d } = prox;
-    const raio = RAIO_ALERTA[it.tipo];
-    $('#hud-next').innerHTML = htmlPlaca(it) + '<div class="txt"><span class="dist">' + fmtDist(d) + '</span><span class="onde">' + esc(it.nome) + '</span></div>';
+    const mg = margem(it);
+    const raio = RAIO_ALERTA[it.tipo] + mg;
+    // posição aproximada: "± 300 m" ao lado da distância; já passou do ponto marcado: "aqui perto"
+    const atras = difAng(pos.heading, rumo(pos, it)) >= 90 && d >= 30;
+    const txtDist = atras ? 'aqui perto' : fmtDist(d) + (mg >= 100 ? ' <small>±' + fmtDist(mg) + '</small>' : '');
+    $('#hud-next').innerHTML = htmlPlaca(it) + '<div class="txt"><span class="dist">' + txtDist + '</span><span class="onde">' + esc(it.nome) + (mg >= 100 ? ' · posição aproximada' : '') + '</span></div>';
 
     if (d <= raio) {
       hud.classList.add('perto');
